@@ -76,7 +76,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             autoconf \
             automake \
+            bzip2 \
             ccache \
+            curl \
             gcc \
             g++ \
             libtool \
@@ -89,6 +91,68 @@ jobs:
       - name: Build mingw prerequisites
         if: ${{ inputs.bootstrap_mingw_prereqs }}
         run: ./scripts/Windows/build-mingw-prereqs.sh
+
+      - name: Build and install missing mingw prerequisites (libgnurx + libusb-1.0.26)
+        run: |
+          set -euo pipefail
+
+          BUILD_TRIPLET="$(dpkg-architecture -qDEB_BUILD_GNU_TYPE)"
+          PREFIX="/usr/${TARGET_TRIPLET}"
+          DLDIR="${RUNNER_TEMP}/mingw-extra-deps/dl"
+          WSDIR="${RUNNER_TEMP}/mingw-extra-deps/build"
+
+          mkdir -p "${DLDIR}" "${WSDIR}"
+
+          export CC="${TARGET_TRIPLET}-gcc"
+          export CXX="${TARGET_TRIPLET}-g++"
+          export AR="${TARGET_TRIPLET}-ar"
+          export RANLIB="${TARGET_TRIPLET}-ranlib"
+          export STRIP="${TARGET_TRIPLET}-strip"
+          export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig"
+
+          build_from_tarball() {
+            dep_name="$1"
+            dep_archive="$2"
+            dep_url="$3"
+            tar_flags="$4"
+
+            echo "Fetching ${dep_name}..."
+            curl -fsSL --retry 3 --retry-delay 2 \
+              -o "${DLDIR}/${dep_archive}" \
+              "${dep_url}"
+
+            rm -rf "${WSDIR:?}/${dep_name}"
+            mkdir -p "${WSDIR}/${dep_name}"
+            tar "${tar_flags}" "${DLDIR}/${dep_archive}" \
+              -C "${WSDIR}/${dep_name}" \
+              --strip-components=1
+
+            (
+              cd "${WSDIR}/${dep_name}"
+              ./configure \
+                --host="${TARGET_TRIPLET}" \
+                --build="${BUILD_TRIPLET}" \
+                --prefix="${PREFIX}"
+              make -j"$(nproc)"
+              sudo make install
+            )
+          }
+
+          build_from_tarball \
+            "mingw-libgnurx-2.5.1" \
+            "mingw-libgnurx-2.5.1-src.tar.gz" \
+            "https://sourceforge.net/projects/mingw/files/Other/UserContributed/regex/mingw-regex-2.5.1/mingw-libgnurx-2.5.1-src.tar.gz/download" \
+            "xzf"
+
+          build_from_tarball \
+            "libusb-1.0.26" \
+            "libusb-1.0.26.tar.bz2" \
+            "https://sourceforge.net/projects/libusb/files/libusb-1.0/libusb-1.0.26/libusb-1.0.26.tar.bz2/download" \
+            "xjf"
+
+          ls -l "${PREFIX}/lib/pkgconfig/libusb-1.0.pc"
+          ls -l "${PREFIX}/bin"/libgnurx*.dll
+          ls -l "${PREFIX}/bin"/libusb-1.0*.dll
 
       - name: Build NUT for Windows win32 x64
         env:
